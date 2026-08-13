@@ -141,10 +141,11 @@ HA Assist ──► Voiceprint (:10350) ──► Transcribe.cpp (:10380)
 
 ## When it stops (Watchdog)
 
-The app declares a Supervisor health probe (a TCP connect to :10380) on top of
-the container healthcheck, but **the Watchdog toggle on the app page is off by
-default** — turn it on for Home Assistant to act on either one. With it on, a
-crashed *or* wedged server (port stops answering) is restarted automatically.
+The container healthcheck sends a real Wyoming `describe` to :10380 and checks
+the reply, so a wedged server (process alive, port not answering) is caught as
+well as a crashed one. **The Watchdog toggle on the app page is off by
+default** — turn it on for Home Assistant to act on that verdict and restart
+the app automatically.
 
 Not every stop should be retried, so the app tells the Supervisor which kind it
 was through its exit code:
