@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import faulthandler
 import logging
 import os
 import signal
@@ -13,7 +14,7 @@ from wyoming.info import AsrModel, AsrProgram, Attribution, Info
 from wyoming.server import AsyncServer
 
 from . import __version__
-from .const import MODELS_DIR, PORT, QUANT_ALIASES
+from .const import EXIT_BOOTSTRAP, MODELS_DIR, PORT, QUANT_ALIASES
 from .enhance import DEFAULT_SIZE as FASTENHANCER_DEFAULT_SIZE
 from .enhance import SIZES as FASTENHANCER_SIZES
 from .engine import TranscribeEngine
@@ -22,6 +23,12 @@ from .model_options import parse_config as parse_model_options
 from .models import DEFAULT_MODEL, REGISTRY, ensure_gguf
 
 _LOGGER = logging.getLogger(__name__)
+
+# Flipped once bootstrap is done and the server task has control. Everything
+# before that point (model download, conversion, weight load, warmup) fails
+# the same way on every start, so those failures exit EXIT_BOOTSTRAP and the
+# add-on stays down; a crash after it is worth a watchdog restart.
+_serving = False
 
 
 def _build_info(
@@ -181,6 +188,8 @@ async def main() -> None:
         )
         server = AsyncServer.from_uri(args.uri)
         _LOGGER.info("Starting server on %s", args.uri)
+        global _serving
+        _serving = True
         server_task = asyncio.create_task(
             server.run(
                 partial(
@@ -200,11 +209,18 @@ async def main() -> None:
 
 
 def run() -> None:
+    # A fault inside libtranscribe (ctypes, no Python frame) otherwise kills
+    # the process with nothing in the log but s6's "by signal 11" — dump the
+    # C-level traceback to stderr so the s6 service log shows where it died.
+    faulthandler.enable()
     try:
         asyncio.run(main())
     except Exception:
+        if _serving:
+            _LOGGER.exception("Fatal error while serving — restarting if enabled")
+            raise SystemExit(1)
         _LOGGER.exception("Fatal error during bootstrap")
-        raise SystemExit(1)
+        raise SystemExit(EXIT_BOOTSTRAP)
 
 
 if __name__ == "__main__":

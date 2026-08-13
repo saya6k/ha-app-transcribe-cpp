@@ -44,4 +44,10 @@ ports:
   10380/tcp: null
 ports_description:
   10380/tcp: Transcribe.cpp Wyoming Protocol
+# Supervisor health probe (enable the "Watchdog" toggle on the app page to
+# act on it): a TCP connect to the Wyoming port. Covers both a crashed
+# container and a live-but-wedged server. Bootstrap/configuration failures
+# exit 78 and the s6 finish handler halts with 0 on purpose, so a broken
+# config stops instead of restart-looping — see rootfs .../transcribe-cpp/finish.
+watchdog: tcp://[HOST]:[PORT:10380]
 homeassistant: 2023.8.0.dev20230718

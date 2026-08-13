@@ -3,11 +3,20 @@
 # ==============================================================================
 # Service finish handler: every service exit halts the container.
 #
-# Clean exits and signals (manual stop) halt with their code.  Bootstrap /
-# configuration failures (bad custom_model, failed conversion, ...) log the
-# reason and halt with the service's exit code — the add-on stops instead of
-# lingering half-alive or silently retrying; logs stay readable in the HA UI.
+# The container's exit code is what the Supervisor watchdog reads (enable the
+# "Watchdog" toggle on the app page to arm it): non-zero marks the app failed
+# and gets it restarted, zero reads as a clean stop and is left alone.  So the
+# code we halt with picks the recovery policy:
+#
+#   clean exit / signal 0     -> 0        stopped on purpose, stay down
+#   exit 78 (EXIT_BOOTSTRAP)  -> 0        broken config, would fail identically
+#                                         on every retry — stay down, the log
+#                                         above says what to fix
+#   any other non-zero        -> as-is    runtime crash, worth a restart
+#   killed by signal          -> 128+sig  crash / OOM kill, worth a restart
 # ==============================================================================
+# Keep in sync with EXIT_BOOTSTRAP in wyoming_transcribe_cpp/const.py.
+readonly exit_code_bootstrap=78
 # shellcheck disable=SC2155
 readonly exit_code_container=$(</run/s6-linux-init-container-results/exitcode)
 readonly exit_code_service="${1}"
@@ -17,23 +26,39 @@ bashio::log.info \
   "Service exited with code ${exit_code_service}" \
   "(by signal ${exit_code_signal})"
 
+# The first service to write wins — never clobber an exit code already set.
+halt_with() {
+  if [[ "${exit_code_container}" -eq 0 ]]; then
+    echo "${1}" > /run/s6-linux-init-container-results/exitcode
+  fi
+  exec /run/s6/basedir/bin/halt
+}
+
 if [[ "${exit_code_signal}" -ne 0 ]]; then
-  # Killed by signal — transient (manual stop / resource limit).  Halt.
-  if [[ "${exit_code_container}" -eq 0 ]]; then
-    echo $((128 + exit_code_signal)) > /run/s6-linux-init-container-results/exitcode
+  # Killed by signal — manual stop, native fault, or the OOM killer.
+  if [[ "${exit_code_signal}" -eq 9 ]]; then
+    bashio::log.error \
+      "transcribe-cpp: killed with SIGKILL — on a host with limited RAM this" \
+      "is almost always the kernel OOM killer. Pick a smaller model or a" \
+      "smaller quantization if it repeats."
   fi
-  exec /run/s6/basedir/bin/halt
+  halt_with $((128 + exit_code_signal))
 elif [[ "${exit_code_service}" -eq 0 ]]; then
-  # Clean exit — transient (graceful shutdown).  Halt.
-  exec /run/s6/basedir/bin/halt
-else
-  # Non-zero exit — configuration/bootstrap failure (bad custom_model,
-  # failed conversion, model download, ...).  Stop the whole add-on.
+  # Clean exit — graceful shutdown.  Halt, stay down.
+  halt_with 0
+elif [[ "${exit_code_service}" -eq "${exit_code_bootstrap}" ]]; then
+  # Bootstrap failure (bad custom_model, failed conversion, model download,
+  # unloadable weights, ...).  Deterministic: restarting would only repeat it,
+  # so halt with 0 and let the watchdog leave the app alone.
   bashio::log.error \
-    "transcribe-cpp: fatal error (exit ${exit_code_service}) —" \
-    "stopping the add-on. Fix the configuration and start it again."
-  if [[ "${exit_code_container}" -eq 0 ]]; then
-    echo "${exit_code_service}" > /run/s6-linux-init-container-results/exitcode
-  fi
-  exec /run/s6/basedir/bin/halt
+    "transcribe-cpp: startup failed — stopping the add-on (a restart would" \
+    "fail the same way). Fix the configuration and start it again."
+  halt_with 0
+else
+  # Crashed after the server was up — transient enough to be worth retrying.
+  bashio::log.error \
+    "transcribe-cpp: crashed (exit ${exit_code_service}) — stopping." \
+    "Enable the Watchdog toggle on the app page to have Home Assistant" \
+    "restart it automatically."
+  halt_with "${exit_code_service}"
 fi
