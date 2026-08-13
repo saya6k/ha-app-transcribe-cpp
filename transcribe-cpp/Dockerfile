@@ -92,6 +92,12 @@ RUN find /usr/local/lib/python3*/dist-packages -name '*.so*' -type f \
 FROM ${BUILD_FROM}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# The base image is labeled io.hass.type=base and build-image only stamps
+# io.hass.arch/version, so without this the add-on image inherits "base".
+# Supervisor's own value is "app" (META_ADDON = "addon" is marked legacy).
+LABEL io.hass.type="app"
+
 # HF_HUB_DISABLE_XET: the xet download backend buffers aggressively and
 # has OOM-killed NeMo weight fetches on small hosts; plain HTTP ranges
 # are slightly slower but memory-flat.
