@@ -143,5 +143,12 @@ RUN ldconfig \
 
 # stdlib probe (netcat dropped from the image): send a Wyoming describe,
 # read the exact data_length payload, expect the service name in it.
-HEALTHCHECK --start-period=10m \
+#
+# This is what the Supervisor watchdog acts on (config.yaml's `watchdog:` key
+# is obsolete — the add-on linter rejects it), so an unhealthy verdict here
+# restarts the app. The start period therefore has to outlast a cold start —
+# a multi-GB GGUF download on a slow link, or a custom_model conversion
+# (per-family venv + torch). It ends early on the first success, so a generous
+# value costs a fast start nothing.
+HEALTHCHECK --start-period=60m \
     CMD python3 -c 'import json,socket,sys; s=socket.create_connection(("localhost",10380),2); s.settimeout(2); s.sendall(b"""{ "type": "describe" }\n"""); f=s.makefile("rb"); h=json.loads(f.readline()); sys.exit(0 if b"transcribe" in f.read(h.get("data_length",0)).lower() else 1)'
