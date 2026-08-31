@@ -6,3 +6,13 @@ __pycache__/
 venv/
 SPEC.md
 tasks/
+
+# Agent scaffolding (AGENTS.md, .agents/, .claude/, .gemini/, and the
+# CLAUDE.md / GEMINI.md symlinks) is per-developer tooling, not repo content.
+# It stays on disk locally and is never tracked.
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.agents/
+.claude/
+.gemini/
